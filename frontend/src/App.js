@@ -3,10 +3,13 @@ import axios from 'axios';
 import { 
   Bot, Plus, Activity, MessageSquare, Trash2, Send, Clock, CheckCircle, XCircle, 
   Moon, Sun, Menu, X, Home, Sparkles, BarChart3, Settings, Zap, Users, FileText,
-  ChevronRight, Search, Filter, RefreshCw, Globe, GitCompare, TrendingUp, AlertCircle
+  ChevronRight, Search, Filter, RefreshCw, Globe, GitCompare, TrendingUp, AlertCircle,
+  Brain, Upload, Star, Lightbulb
 } from 'lucide-react';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
-import QuickActions from './components/QuickActions';
+import EnhancedQuickActions from './components/EnhancedQuickActions';
+import OnboardingGuide from './components/OnboardingGuide';
+import EnhancedTaskInterface from './components/EnhancedTaskInterface';
 import AgentTemplates from './components/AgentTemplates';
 import AnalyticsDashboard from './components/AnalyticsDashboard';
 import AccessibleButton from './components/AccessibleButton';
