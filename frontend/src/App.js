@@ -56,10 +56,14 @@ const Header = ({ activeTab, setActiveTab, sidebarOpen, setSidebarOpen }) => {
             </AccessibleButton>
             
             <div className="flex items-center ml-2 lg:ml-0">
-              <Bot className="w-8 h-8 text-blue-500 mr-3" aria-hidden="true" />
+              <div className="p-1 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl mr-3">
+                <Bot className="w-6 h-6 text-white" aria-hidden="true" />
+              </div>
               <div>
                 <h1 className="text-xl font-bold text-gray-900 dark:text-white">Agentic AI Platform</h1>
-                <p className="text-xs text-gray-500 dark:text-gray-400 hidden sm:block">v2.1 Enhanced</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 hidden sm:block">
+                  v2.2 Enhanced • Intelligence & Performance
+                </p>
               </div>
             </div>
           </div>
