@@ -197,8 +197,35 @@ AGENT_TEMPLATES = [
 
 @app.get("/")
 async def root():
-    return {"message": "Agentic AI Platform API"}
+    return {"message": "Agentic AI Platform API v2.0 - Enhanced"}
 
+# Agent Templates endpoints
+@app.get("/api/agent-templates")
+async def get_agent_templates():
+    """Get all available agent templates"""
+    return {"templates": AGENT_TEMPLATES}
+
+@app.post("/api/agents/from-template/{template_name}")
+async def create_agent_from_template(template_name: str, agent_name: str):
+    """Create an agent from a template"""
+    template = next((t for t in AGENT_TEMPLATES if t.name.lower().replace(" ", "") == template_name.lower()), None)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    
+    agent = Agent(
+        id=str(uuid.uuid4()),
+        name=agent_name,
+        description=template.description,
+        system_prompt=template.system_prompt,
+        model=template.suggested_model,
+        specialization=template.specialization,
+        created_at=datetime.utcnow()
+    )
+    
+    await db.agents.insert_one(agent.dict())
+    return agent
+
+# Enhanced agent endpoints
 @app.get("/api/agents")
 async def get_agents():
     agents = []
@@ -215,6 +242,8 @@ async def create_agent(request: CreateAgentRequest):
         description=request.description,
         system_prompt=request.system_prompt,
         model=request.model,
+        specialization=request.specialization,
+        settings=request.settings,
         created_at=datetime.utcnow()
     )
     
@@ -228,6 +257,33 @@ async def get_agent(agent_id: str):
         raise HTTPException(status_code=404, detail="Agent not found")
     agent["_id"] = str(agent["_id"])
     return agent
+
+# Conversation endpoints
+@app.post("/api/conversations")
+async def create_conversation(agent_id: str):
+    """Create a new conversation with an agent"""
+    agent = await db.agents.find_one({"id": agent_id})
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    conversation = Conversation(
+        id=str(uuid.uuid4()),
+        agent_id=agent_id,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
+    )
+    
+    await db.conversations.insert_one(conversation.dict())
+    return conversation
+
+@app.get("/api/conversations/{conversation_id}")
+async def get_conversation(conversation_id: str):
+    """Get conversation history"""
+    conversation = await db.conversations.find_one({"id": conversation_id})
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    conversation["_id"] = str(conversation["_id"])
+    return conversation
 
 @app.post("/api/agents/{agent_id}/tasks")
 async def create_task(agent_id: str, request: CreateTaskRequest):
