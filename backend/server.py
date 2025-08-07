@@ -31,8 +31,54 @@ db = client.agentic_ai
 # Groq client setup
 groq_client = Groq(
     api_key=os.getenv("GROQ_API_KEY"),
-    base_url=os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+    base_url=os.getenv("GROQ_BASE_URL", "https://api.groq.com")
 )
+
+# Smart Model Selection Configuration
+MODEL_SELECTION_CONFIG = {
+    "creative_tasks": "llama3-70b-8192",  # Creative writing, content generation
+    "analysis_tasks": "mixtral-8x7b-32768",  # Data analysis, complex reasoning
+    "fast_responses": "llama3-8b-8192",  # Quick responses, simple tasks
+    "coding_tasks": "llama3-70b-8192",  # Code generation, technical tasks
+    "conversation": "llama3-8b-8192",  # Multi-turn conversations
+    "default": "llama3-8b-8192"
+}
+
+# Task Classification Keywords
+TASK_KEYWORDS = {
+    "creative_tasks": ["write", "create", "generate", "compose", "design", "brainstorm", "story", "content", "marketing", "blog"],
+    "analysis_tasks": ["analyze", "compare", "evaluate", "assess", "examine", "study", "research", "review", "summarize", "insights"],
+    "coding_tasks": ["code", "program", "develop", "build", "debug", "fix", "api", "function", "algorithm", "script"],
+    "conversation": ["chat", "talk", "discuss", "conversation", "explain", "help", "assist"]
+}
+
+def classify_task_type(prompt: str) -> str:
+    """Classify task type based on prompt content for smart model selection"""
+    prompt_lower = prompt.lower()
+    
+    scores = {task_type: 0 for task_type in TASK_KEYWORDS}
+    
+    for task_type, keywords in TASK_KEYWORDS.items():
+        for keyword in keywords:
+            if keyword in prompt_lower:
+                scores[task_type] += 1
+    
+    # Return task type with highest score, default to 'fast_responses'
+    max_score_type = max(scores, key=scores.get)
+    return max_score_type if scores[max_score_type] > 0 else "fast_responses"
+
+def select_optimal_model(task_type: str, complexity_score: int = 1) -> str:
+    """Select optimal Groq model based on task type and complexity"""
+    base_model = MODEL_SELECTION_CONFIG.get(task_type, MODEL_SELECTION_CONFIG["default"])
+    
+    # Upgrade to more powerful model for complex tasks
+    if complexity_score > 3:
+        if base_model == "llama3-8b-8192":
+            return "llama3-70b-8192"
+        elif base_model == "llama3-70b-8192":
+            return "mixtral-8x7b-32768"
+    
+    return base_model
 
 # Pydantic models
 class Agent(BaseModel):
