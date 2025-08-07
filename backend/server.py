@@ -180,7 +180,7 @@ AGENT_TEMPLATES = [
         description="Conducts thorough research and provides comprehensive summaries",
         system_prompt="You are a research expert. Provide comprehensive, well-sourced information with clear analysis and actionable insights.",
         specialization="analysis_tasks",
-        suggested_model="mixtral-8x7b-32768",
+        suggested_model="llama-3.3-70b-versatile",  # Updated to available model
         icon="🔍",
         category="research"
     ),
