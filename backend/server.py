@@ -171,7 +171,7 @@ AGENT_TEMPLATES = [
         description="Provides helpful, empathetic customer service responses",
         system_prompt="You are a friendly customer support representative. Be helpful, empathetic, and solution-focused. Always maintain a professional yet warm tone.",
         specialization="conversation",
-        suggested_model="llama3-8b-8192",
+        suggested_model="llama-3.1-8b-instant",  # Updated to available model
         icon="🎧",
         category="support"
     ),
