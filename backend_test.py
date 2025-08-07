@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """
-Enhanced Backend API Testing for Agentic AI Platform v2.0
+Enhanced Backend API Testing for Agentic AI Platform v2.1
 Tests all backend endpoints including new enhanced features:
+- Enhanced Health Check with Redis, DB, Groq API status
+- System Performance Metrics (CPU, memory, disk)
+- Prometheus Metrics endpoint
+- Web Scraping with AI analysis
+- Model Comparison with multiple Groq models
+- Enhanced Analytics Dashboard with performance data
+- Redis Caching system
+- Rate Limiting functionality
 - Smart Model Selection
 - Agent Templates
 - Conversation Support
-- Analytics Dashboard
 - File Upload
-- Health Check
 """
 
 import requests
