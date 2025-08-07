@@ -241,6 +241,12 @@ const AppContent = () => {
   const [filterStatus, setFilterStatus] = useState('all');
   const [error, setError] = useState('');
   const [systemHealth, setSystemHealth] = useState(null);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [enhancedFeatures, setEnhancedFeatures] = useState({
+    intelligenceScore: 0,
+    memoryEfficiency: 0,
+    multimodalCount: 0
+  });
   
   // Form states
   const [agentForm, setAgentForm] = useState({
