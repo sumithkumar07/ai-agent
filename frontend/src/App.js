@@ -753,13 +753,41 @@ const AppContent = () => {
                               ariaLabel={`Enter task for ${agent.name}`}
                             />
                             <AccessibleButton
-                              onClick={() => executeTask(agent.id)}
+                              onClick={() => executeBasicTask(agent.id)}
                               disabled={loading || !taskPrompt.trim() || selectedAgent !== agent.id}
                               icon={Send}
                               size="sm"
                               ariaLabel={`Execute task for ${agent.name}`}
                             />
                           </div>
+                          
+                          {/* Enhanced Task Interface */}
+                          {selectedAgent === agent.id && (
+                            <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-xl border border-gray-200 dark:border-gray-600">
+                              <div className="mb-3">
+                                <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center">
+                                  <Sparkles className="w-4 h-4 mr-1 text-purple-500" />
+                                  Enhanced Features
+                                </h4>
+                                <p className="text-xs text-gray-500 dark:text-gray-400">
+                                  Use the Enhanced Task Interface for multi-modal processing, web scraping, and advanced AI capabilities.
+                                </p>
+                              </div>
+                              <AccessibleButton
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => {
+                                  // Could open enhanced interface in modal or navigate
+                                  setActiveTab('enhanced-task');
+                                }}
+                                className="w-full"
+                                ariaLabel={`Open enhanced interface for ${agent.name}`}
+                              >
+                                <Brain className="w-4 h-4 mr-2" />
+                                Open Enhanced Interface
+                              </AccessibleButton>
+                            </div>
+                          )}
                         </div>
                       </div>
                     ))}
