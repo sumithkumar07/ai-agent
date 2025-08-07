@@ -266,7 +266,27 @@ const AppContent = () => {
     fetchAgents();
     fetchAllTasks();
     checkSystemHealth();
+    fetchEnhancedFeatures();
+    
+    // Check if user has completed onboarding
+    const onboardingCompleted = localStorage.getItem('onboarding_completed');
+    if (!onboardingCompleted) {
+      setShowOnboarding(true);
+    }
   }, []);
+
+  const fetchEnhancedFeatures = async () => {
+    try {
+      const response = await axios.get(`${API_BASE}/api/analytics/enhanced`);
+      setEnhancedFeatures({
+        intelligenceScore: response.data.intelligence_metrics?.average_intelligence_score || 0,
+        memoryEfficiency: response.data.memory_efficiency?.average_efficiency || 0,
+        multimodalCount: response.data.multimodal_usage?.total_files_processed || 0
+      });
+    } catch (error) {
+      console.error('Error fetching enhanced features:', error);
+    }
+  };
 
   // Focus management when changing tabs
   useEffect(() => {
