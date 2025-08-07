@@ -297,7 +297,7 @@ const AppContent = () => {
 
   const checkSystemHealth = async () => {
     try {
-      const response = await axios.get(`${API_BASE}/api/health`);
+      const response = await axios.get(`${API_BASE}/api/health/enhanced`);
       setSystemHealth(response.data);
     } catch (error) {
       console.error('Health check failed:', error);
