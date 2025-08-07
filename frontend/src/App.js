@@ -1065,6 +1065,33 @@ const AppContent = () => {
               </div>
             )}
 
+            {/* Enhanced Task Interface Tab */}
+            {activeTab === 'enhanced-task' && selectedAgent && (
+              <div className="space-y-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Enhanced Task Interface</h2>
+                    <p className="text-gray-600 dark:text-gray-400 mt-1">
+                      Advanced AI processing with multi-modal capabilities
+                    </p>
+                  </div>
+                  <AccessibleButton
+                    variant="secondary"
+                    onClick={() => setActiveTab('agents')}
+                    ariaLabel="Back to agents"
+                  >
+                    ← Back to Agents
+                  </AccessibleButton>
+                </div>
+                
+                <EnhancedTaskInterface
+                  agent={agents.find(a => a.id === selectedAgent)}
+                  onTaskSubmit={(taskData) => executeTask(selectedAgent, taskData)}
+                  isLoading={loading}
+                />
+              </div>
+            )}
+
             {/* Settings Tab */}
             {activeTab === 'settings' && (
               <div className="max-w-4xl mx-auto space-y-8">
