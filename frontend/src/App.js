@@ -1183,6 +1183,13 @@ const AppContent = () => {
         </main>
       </div>
 
+      {/* Onboarding Guide */}
+      <OnboardingGuide
+        isOpen={showOnboarding}
+        onClose={() => setShowOnboarding(false)}
+        onActionTrigger={handleQuickAction}
+      />
+
       {/* Loading Overlay */}
       {loading && (
         <div 
