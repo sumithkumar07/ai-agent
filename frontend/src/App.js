@@ -418,6 +418,15 @@ const AppContent = () => {
       case 'view-analytics':
         setActiveTab('analytics');
         break;
+      case 'multimodal-upload':
+        setActiveTab('agents');
+        break;
+      case 'browse-templates':
+        setActiveTab('templates');
+        break;
+      case 'view-activity':
+        setActiveTab('activity');
+        break;
       default:
         break;
     }
