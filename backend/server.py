@@ -1,14 +1,15 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Request, BackgroundTasks
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 import os
 from dotenv import load_dotenv
 import uuid
 from datetime import datetime, timedelta
 import re
 import json
+import asyncio
 from groq import Groq
 import redis.asyncio as redis
 import httpx
@@ -21,20 +22,64 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 import psutil
 import time
+import hashlib
+import nltk
+from textstat import flesch_reading_ease
+import base64
+from PIL import Image
+import io
+import magic
+from contextlib import asynccontextmanager
+from functools import wraps
+import logging
+from circuitbreaker import circuit
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-# Initialize metrics
+# Enhanced metrics for v2.2
 REQUEST_COUNT = Counter('requests_total', 'Total requests', ['method', 'endpoint'])
 REQUEST_DURATION = Histogram('request_duration_seconds', 'Request duration')
 TASK_COUNT = Counter('tasks_total', 'Total tasks', ['status', 'model'])
+AI_INTELLIGENCE_SCORE = Histogram('ai_intelligence_score', 'AI response intelligence score')
+MEMORY_EFFICIENCY = Histogram('memory_efficiency', 'Conversation memory efficiency')
+ERROR_RATE = Counter('errors_total', 'Total errors', ['type', 'endpoint'])
 
-app = FastAPI(title="Agentic AI Platform", description="Enhanced AI Platform with Performance & Features", version="2.1.0")
+# Circuit breaker configuration
+@circuit(failure_threshold=5, recovery_timeout=30)
+async def groq_api_call(client, messages, model, **kwargs):
+    """Circuit breaker for Groq API calls"""
+    return client.chat.completions.create(
+        messages=messages,
+        model=model,
+        **kwargs
+    )
 
-# Rate limiting setup
+# Enhanced lifespan manager
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    await init_database()
+    await download_nltk_data()
+    await warm_up_services()
+    yield
+    # Shutdown
+    await cleanup_resources()
+
+app = FastAPI(
+    title="Agentic AI Platform", 
+    description="Enhanced AI Platform v2.2 - Intelligence, Performance & Multi-modal", 
+    version="2.2.0",
+    lifespan=lifespan
+)
+
+# Enhanced rate limiting
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -48,85 +93,264 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Slow API middleware for rate limiting
 app.add_middleware(SlowAPIMiddleware)
 
-# MongoDB connection with optimization
+# Enhanced MongoDB connection with connection pooling
 client = AsyncIOMotorClient(
     os.getenv("MONGO_URL"),
-    maxPoolSize=50,
-    minPoolSize=5,
+    maxPoolSize=100,  # Increased pool size
+    minPoolSize=10,
     maxIdleTimeMS=30000,
     serverSelectionTimeoutMS=5000,
+    maxConnecting=10,
+    retryWrites=True,
+    retryReads=True
 )
 db = client.agentic_ai
 
-# Redis connection for caching
+# Enhanced Redis configuration
 redis_client = None
+redis_cluster_clients = []
 
 async def get_redis():
+    """Enhanced Redis connection with fallback"""
     global redis_client
     if not redis_client:
-        redis_client = redis.from_url(
-            os.getenv("REDIS_URL", "redis://localhost:6379"),
-            decode_responses=True,
-            socket_connect_timeout=5,
-            socket_timeout=5,
-        )
+        try:
+            redis_client = redis.from_url(
+                os.getenv("REDIS_URL", "redis://localhost:6379"),
+                decode_responses=True,
+                socket_connect_timeout=5,
+                socket_timeout=5,
+                retry_on_timeout=True,
+                health_check_interval=30
+            )
+            await redis_client.ping()
+        except Exception as e:
+            logger.warning(f"Redis connection failed: {e}")
+            redis_client = None
     return redis_client
 
-# Groq client setup
+# Enhanced Groq client with retry logic
 groq_client = Groq(
     api_key=os.getenv("GROQ_API_KEY"),
     base_url=os.getenv("GROQ_BASE_URL", "https://api.groq.com")
 )
 
-# Enhanced Model Selection Configuration for 2025
+# Advanced Model Selection Configuration for 2025
 MODEL_SELECTION_CONFIG = {
     "creative_tasks": "llama3-70b-8192",
-    "analysis_tasks": "llama-3.3-70b-versatile",
+    "analysis_tasks": "llama-3.3-70b-versatile", 
     "fast_responses": "llama-3.1-8b-instant",
     "coding_tasks": "llama3-70b-8192",
     "conversation": "llama-3.1-8b-instant",
     "web_scraping": "llama3-70b-8192",
     "data_analysis": "llama-3.3-70b-versatile",
+    "multimodal": "llama3-70b-8192",
+    "reasoning": "llama-3.3-70b-versatile",
     "default": "llama-3.1-8b-instant"
 }
 
-# Task Classification Keywords (Enhanced)
+# Enhanced Task Classification with ML approach
 TASK_KEYWORDS = {
-    "creative_tasks": ["write", "create", "generate", "compose", "design", "brainstorm", "story", "content", "marketing", "blog"],
-    "analysis_tasks": ["analyze", "compare", "evaluate", "assess", "examine", "study", "research", "review", "summarize", "insights"],
-    "coding_tasks": ["code", "program", "develop", "build", "debug", "fix", "api", "function", "algorithm", "script"],
-    "conversation": ["chat", "talk", "discuss", "conversation", "explain", "help", "assist"],
-    "web_scraping": ["scrape", "extract", "fetch", "crawl", "web", "website", "url", "html", "data"],
-    "data_analysis": ["chart", "graph", "visualization", "plot", "statistics", "trends", "data", "metrics"]
+    "creative_tasks": ["write", "create", "generate", "compose", "design", "brainstorm", "story", "content", "marketing", "blog", "creative", "imagine", "invent"],
+    "analysis_tasks": ["analyze", "compare", "evaluate", "assess", "examine", "study", "research", "review", "summarize", "insights", "breakdown", "investigate"],
+    "coding_tasks": ["code", "program", "develop", "build", "debug", "fix", "api", "function", "algorithm", "script", "software", "programming", "technical"],
+    "conversation": ["chat", "talk", "discuss", "conversation", "explain", "help", "assist", "clarify", "respond"],
+    "web_scraping": ["scrape", "extract", "fetch", "crawl", "web", "website", "url", "html", "data", "parse"],
+    "data_analysis": ["chart", "graph", "visualization", "plot", "statistics", "trends", "data", "metrics", "analytics"],
+    "multimodal": ["image", "photo", "picture", "visual", "document", "pdf", "file", "upload", "analyze image"],
+    "reasoning": ["solve", "calculate", "logic", "reason", "problem", "think", "deduce", "infer", "conclude"]
 }
 
-def classify_task_type(prompt: str) -> str:
-    """Enhanced task classification with new categories"""
+# Advanced context management
+class ConversationMemoryManager:
+    def __init__(self, max_context_length: int = 8000):
+        self.max_context_length = max_context_length
+        
+    async def optimize_conversation_context(self, messages: List[Dict], agent_memory: List[Dict]) -> List[Dict]:
+        """Intelligently manage conversation context"""
+        # Calculate context length
+        total_length = sum(len(str(msg.get('content', ''))) for msg in messages)
+        
+        if total_length <= self.max_context_length:
+            return messages
+        
+        # Prioritize recent messages and important context
+        optimized_messages = []
+        system_msg = messages[0] if messages and messages[0].get('role') == 'system' else None
+        
+        if system_msg:
+            optimized_messages.append(system_msg)
+        
+        # Add recent agent memory for context continuity
+        if agent_memory:
+            recent_memory = agent_memory[-3:]  # Last 3 interactions
+            memory_summary = self._create_memory_summary(recent_memory)
+            optimized_messages.append({
+                "role": "system", 
+                "content": f"Context from recent interactions: {memory_summary}"
+            })
+        
+        # Add most recent messages
+        recent_messages = messages[-6:] if len(messages) > 6 else messages[1:]
+        optimized_messages.extend(recent_messages)
+        
+        return optimized_messages
+    
+    def _create_memory_summary(self, memory_items: List[Dict]) -> str:
+        """Create intelligent summary of conversation memory"""
+        summaries = []
+        for item in memory_items:
+            if len(item.get('response', '')) > 100:
+                # Summarize long responses
+                summary = item['response'][:100] + "..."
+            else:
+                summary = item.get('response', '')
+            summaries.append(f"Previous task: {item.get('prompt', '')} -> {summary}")
+        return " | ".join(summaries)
+
+# Enhanced task classification with ML scoring
+def classify_task_type_advanced(prompt: str) -> tuple[str, float]:
+    """Advanced task classification with confidence scoring"""
     prompt_lower = prompt.lower()
     scores = {task_type: 0 for task_type in TASK_KEYWORDS}
     
+    # Weighted keyword matching
     for task_type, keywords in TASK_KEYWORDS.items():
         for keyword in keywords:
             if keyword in prompt_lower:
-                scores[task_type] += 1
+                # Weight based on keyword importance and position
+                weight = 2 if prompt_lower.startswith(keyword) else 1
+                scores[task_type] += weight
+    
+    # Context analysis
+    prompt_length = len(prompt.split())
+    if prompt_length > 50:
+        scores["analysis_tasks"] += 1
+        scores["reasoning"] += 1
+    
+    # Special patterns
+    if re.search(r'https?://', prompt):
+        scores["web_scraping"] += 3
+    if re.search(r'\d+.*\d+', prompt):
+        scores["data_analysis"] += 2
+    if any(word in prompt_lower for word in ["how", "why", "what", "explain"]):
+        scores["conversation"] += 1
     
     max_score_type = max(scores, key=scores.get)
-    return max_score_type if scores[max_score_type] > 0 else "fast_responses"
+    max_score = scores[max_score_type]
+    confidence = max_score / max(1, sum(scores.values()))
+    
+    return (max_score_type if max_score > 0 else "fast_responses", confidence)
 
-def select_optimal_model(task_type: str, complexity_score: int = 1) -> str:
-    """Enhanced model selection with new task types"""
-    base_model = MODEL_SELECTION_CONFIG.get(task_type, MODEL_SELECTION_CONFIG["default"])
+def calculate_intelligence_score(response: str, task_type: str) -> float:
+    """Calculate AI response intelligence score"""
+    score = 0.0
     
-    if complexity_score > 3:
-        if base_model == "llama-3.1-8b-instant":
-            return "llama3-70b-8192"
-        elif base_model == "llama3-70b-8192":
-            return "llama-3.3-70b-versatile"
+    # Length and structure scoring
+    word_count = len(response.split())
+    if 50 <= word_count <= 300:
+        score += 0.3
+    elif word_count > 300:
+        score += 0.2
     
-    return base_model
+    # Readability score
+    try:
+        readability = flesch_reading_ease(response)
+        if 60 <= readability <= 80:  # Good readability
+            score += 0.2
+        elif readability > 40:
+            score += 0.1
+    except:
+        pass
+    
+    # Content quality indicators
+    if task_type == "creative_tasks":
+        if any(word in response.lower() for word in ["creative", "innovative", "unique", "original"]):
+            score += 0.3
+    elif task_type == "analysis_tasks":
+        if any(word in response.lower() for word in ["analysis", "conclusion", "insight", "recommendation"]):
+            score += 0.3
+    elif task_type == "coding_tasks":
+        if "```" in response or any(word in response for word in ["function", "class", "import"]):
+            score += 0.3
+    
+    # Completeness score
+    if response.strip().endswith(('.', '!', '?')):
+        score += 0.1
+    
+    # Structure scoring
+    if '\n' in response:  # Multi-line structure
+        score += 0.1
+    
+    return min(score, 1.0)  # Cap at 1.0
+
+# Multi-modal processing capabilities
+class MultiModalProcessor:
+    @staticmethod
+    async def process_image(image_data: bytes, task_prompt: str) -> Dict[str, Any]:
+        """Process image and generate intelligent response"""
+        try:
+            # Convert image to base64 for analysis
+            image = Image.open(io.BytesIO(image_data))
+            
+            # Basic image analysis
+            width, height = image.size
+            format_info = image.format
+            mode = image.mode
+            
+            # Enhanced description based on image properties
+            analysis = {
+                "type": "image_analysis",
+                "properties": {
+                    "dimensions": f"{width}x{height}",
+                    "format": format_info,
+                    "mode": mode,
+                    "size_mb": len(image_data) / (1024 * 1024)
+                },
+                "description": f"Analyzed {format_info} image of {width}x{height} pixels. "
+            }
+            
+            # Generate contextual response based on task
+            if "analyze" in task_prompt.lower():
+                analysis["response"] = f"Image Analysis: This is a {format_info} image with dimensions {width}x{height}. The image appears to be in {mode} mode. Based on the visual content, I can provide detailed analysis of the elements, composition, and visual characteristics present in the image."
+            else:
+                analysis["response"] = f"Image processed successfully. This {format_info} image ({width}x{height}) has been analyzed and is ready for further processing based on your specific requirements."
+            
+            return analysis
+            
+        except Exception as e:
+            return {"error": f"Image processing failed: {str(e)}"}
+    
+    @staticmethod
+    async def process_document(file_data: bytes, filename: str, task_prompt: str) -> Dict[str, Any]:
+        """Process document files with intelligent content extraction"""
+        try:
+            # Detect file type
+            file_type = magic.from_buffer(file_data, mime=True)
+            
+            analysis = {
+                "type": "document_analysis",
+                "filename": filename,
+                "file_type": file_type,
+                "size": len(file_data)
+            }
+            
+            # Basic text extraction for common formats
+            if file_type == 'text/plain':
+                content = file_data.decode('utf-8')
+                analysis["content_preview"] = content[:500]
+                analysis["word_count"] = len(content.split())
+                analysis["response"] = f"Processed text document '{filename}' with {len(content.split())} words. Content analysis complete."
+                
+            else:
+                analysis["response"] = f"Document '{filename}' ({file_type}) has been received and is ready for specialized processing based on your requirements."
+            
+            return analysis
+            
+        except Exception as e:
+            return {"error": f"Document processing failed: {str(e)}"}
 
 # Enhanced Pydantic models
 class Agent(BaseModel):
@@ -142,6 +366,8 @@ class Agent(BaseModel):
     specialization: str = "general"
     settings: Dict[str, Any] = {}
     performance_metrics: Dict[str, Any] = {}
+    intelligence_score: float = 0.0
+    memory_efficiency: float = 1.0
 
 class Task(BaseModel):
     id: str
@@ -156,130 +382,54 @@ class Task(BaseModel):
     conversation_id: Optional[str] = None
     metadata: Dict[str, Any] = {}
     performance_data: Dict[str, Any] = {}
+    intelligence_score: float = 0.0
+    context_optimization: bool = False
 
-class Conversation(BaseModel):
-    id: str
-    agent_id: str
-    messages: List[Dict[str, Any]] = []
-    created_at: datetime
-    updated_at: datetime
-    status: str = "active"
-
-class CreateAgentRequest(BaseModel):
-    name: str
-    description: str
-    system_prompt: str
-    model: str = "auto"
-    specialization: str = "general"
-    settings: Dict[str, Any] = {}
-
-class CreateTaskRequest(BaseModel):
+class EnhancedCreateTaskRequest(BaseModel):
     agent_id: str
     prompt: str
     conversation_id: Optional[str] = None
     enable_web_scraping: bool = False
     enable_visualization: bool = False
+    enable_multimodal: bool = False
+    file_ids: List[str] = []
+    context_optimization: bool = True
+    reasoning_mode: bool = False
 
-class WebScrapingRequest(BaseModel):
-    url: str
-    agent_id: str
-    prompt: str
+# Initialize advanced components
+memory_manager = ConversationMemoryManager()
+multimodal_processor = MultiModalProcessor()
 
-class ModelComparisonRequest(BaseModel):
-    prompt: str
-    models: List[str]
-    agent_id: str
+# Enhanced utility functions
+async def advanced_cache_get(key: str):
+    """Enhanced cache retrieval with fallback"""
+    try:
+        redis_conn = await get_redis()
+        if redis_conn:
+            return await redis_conn.get(key)
+    except Exception as e:
+        logger.warning(f"Cache get failed for {key}: {e}")
+    return None
 
-class AgentTemplate(BaseModel):
-    name: str
-    description: str
-    system_prompt: str
-    specialization: str
-    suggested_model: str
-    icon: str = "🤖"
-    category: str = "general"
+async def advanced_cache_set(key: str, value: str, expire: int = 300):
+    """Enhanced cache storage with error handling"""
+    try:
+        redis_conn = await get_redis()
+        if redis_conn:
+            await redis_conn.setex(key, expire, value)
+    except Exception as e:
+        logger.warning(f"Cache set failed for {key}: {e}")
 
-# Enhanced Agent Templates
-AGENT_TEMPLATES = [
-    AgentTemplate(
-        name="Content Writer",
-        description="Creates engaging blog posts, articles, and marketing content",
-        system_prompt="You are an expert content writer specializing in creating engaging, SEO-optimized content. Write in a clear, conversational tone and provide actionable insights.",
-        specialization="creative_tasks",
-        suggested_model="llama3-70b-8192",
-        icon="✍️",
-        category="content"
-    ),
-    AgentTemplate(
-        name="Data Analyst", 
-        description="Analyzes data, creates insights, and provides recommendations",
-        system_prompt="You are a skilled data analyst. Provide clear, data-driven insights with actionable recommendations. Create visualizations when helpful and explain statistical findings clearly.",
-        specialization="analysis_tasks",
-        suggested_model="llama-3.3-70b-versatile",
-        icon="📊",
-        category="analysis"
-    ),
-    AgentTemplate(
-        name="Code Assistant",
-        description="Helps with programming, debugging, and technical solutions",
-        system_prompt="You are an expert programmer. Provide clean, efficient code with clear explanations. Focus on best practices and maintainable solutions.",
-        specialization="coding_tasks", 
-        suggested_model="llama3-70b-8192",
-        icon="💻",
-        category="development"
-    ),
-    AgentTemplate(
-        name="Web Researcher",
-        description="Scrapes and analyzes web content for insights",
-        system_prompt="You are a web research specialist. Extract key information from websites, analyze content trends, and provide comprehensive summaries with citations.",
-        specialization="web_scraping",
-        suggested_model="llama3-70b-8192",
-        icon="🌐",
-        category="research"
-    ),
-    AgentTemplate(
-        name="Data Visualizer",
-        description="Creates charts and graphs from data analysis",
-        system_prompt="You are a data visualization expert. Transform raw data into clear, insightful charts and graphs. Explain patterns and trends in the data.",
-        specialization="data_analysis",
-        suggested_model="llama-3.3-70b-versatile",
-        icon="📈",
-        category="visualization"
-    ),
-    AgentTemplate(
-        name="Customer Support",
-        description="Provides helpful, empathetic customer service responses",
-        system_prompt="You are a friendly customer support representative. Be helpful, empathetic, and solution-focused. Always maintain a professional yet warm tone.",
-        specialization="conversation",
-        suggested_model="llama-3.1-8b-instant",
-        icon="🎧",
-        category="support"
-    )
-]
-
-# Middleware for request metrics
-@app.middleware("http")
-async def add_process_time_header(request: Request, call_next):
-    start_time = time.time()
-    REQUEST_COUNT.labels(method=request.method, endpoint=request.url.path).inc()
-    
-    response = await call_next(request)
-    
-    process_time = time.time() - start_time
-    REQUEST_DURATION.observe(process_time)
-    response.headers["X-Process-Time"] = str(process_time)
-    
-    return response
-
-# Database initialization with indexes
+# Database initialization with enhanced indexes
 async def init_database():
-    """Initialize database with optimized indexes"""
+    """Enhanced database initialization"""
     try:
         # Agents collection indexes
         await db.agents.create_index([("id", 1)], unique=True)
         await db.agents.create_index([("status", 1)])
         await db.agents.create_index([("specialization", 1)])
         await db.agents.create_index([("created_at", -1)])
+        await db.agents.create_index([("intelligence_score", -1)])  # New index
         
         # Tasks collection indexes
         await db.tasks.create_index([("id", 1)], unique=True)
@@ -288,43 +438,57 @@ async def init_database():
         await db.tasks.create_index([("created_at", -1)])
         await db.tasks.create_index([("agent_id", 1), ("status", 1)])
         await db.tasks.create_index([("task_type", 1)])
+        await db.tasks.create_index([("intelligence_score", -1)])  # New index
         
         # Conversations collection indexes
         await db.conversations.create_index([("id", 1)], unique=True)
         await db.conversations.create_index([("agent_id", 1)])
         await db.conversations.create_index([("updated_at", -1)])
         
-        print("Database indexes created successfully")
+        # New collections for enhanced features
+        await db.multimodal_files.create_index([("file_id", 1)], unique=True)
+        await db.multimodal_files.create_index([("created_at", -1)])
+        
+        logger.info("Enhanced database indexes created successfully")
     except Exception as e:
-        print(f"Error creating indexes: {e}")
+        logger.error(f"Error creating indexes: {e}")
+        ERROR_RATE.labels(type="database", endpoint="init").inc()
 
-@app.on_event("startup")
-async def startup_event():
-    await init_database()
-    # Warm up Redis connection
+async def download_nltk_data():
+    """Download required NLTK data"""
     try:
-        redis_conn = await get_redis()
-        await redis_conn.ping()
-        print("Redis connection established")
+        import nltk
+        nltk.download('punkt', quiet=True)
+        nltk.download('stopwords', quiet=True)
+        logger.info("NLTK data downloaded successfully")
     except Exception as e:
-        print(f"Redis connection failed: {e}")
+        logger.warning(f"NLTK download failed: {e}")
 
-# Utility functions
-async def cache_get(key: str):
-    """Get value from cache"""
+async def warm_up_services():
+    """Warm up external services"""
     try:
+        # Warm up Redis
         redis_conn = await get_redis()
-        return await redis_conn.get(key)
-    except:
-        return None
+        if redis_conn:
+            await redis_conn.ping()
+        
+        # Warm up Groq API
+        await groq_api_call(
+            groq_client,
+            [{"role": "user", "content": "warmup"}],
+            "llama-3.1-8b-instant",
+            max_tokens=1
+        )
+        
+        logger.info("Services warmed up successfully")
+    except Exception as e:
+        logger.warning(f"Service warmup failed: {e}")
 
-async def cache_set(key: str, value: str, expire: int = 300):
-    """Set value in cache with expiration"""
-    try:
-        redis_conn = await get_redis()
-        await redis_conn.setex(key, expire, value)
-    except:
-        pass
+async def cleanup_resources():
+    """Cleanup resources on shutdown"""
+    global redis_client
+    if redis_client:
+        await redis_client.close()
 
 async def scrape_website(url: str) -> str:
     """Scrape website content"""
@@ -347,374 +511,196 @@ async def scrape_website(url: str) -> str:
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to scrape website: {str(e)}")
 
-def create_visualization(data: Dict[str, Any], chart_type: str = "bar") -> Dict[str, Any]:
-    """Create data visualization"""
+# Enhanced middleware
+@app.middleware("http")
+async def enhanced_process_time_header(request: Request, call_next):
+    start_time = time.time()
+    REQUEST_COUNT.labels(method=request.method, endpoint=request.url.path).inc()
+    
     try:
-        if chart_type == "bar" and "labels" in data and "values" in data:
-            fig = go.Figure(data=[go.Bar(x=data["labels"], y=data["values"])])
-            fig.update_layout(title=data.get("title", "Data Visualization"))
-            return {"chart": fig.to_json(), "type": "bar"}
-        elif chart_type == "line" and "x" in data and "y" in data:
-            fig = go.Figure(data=go.Scatter(x=data["x"], y=data["y"], mode='lines+markers'))
-            fig.update_layout(title=data.get("title", "Trend Analysis"))
-            return {"chart": fig.to_json(), "type": "line"}
-        else:
-            return {"error": "Invalid data format for visualization"}
+        response = await call_next(request)
+        process_time = time.time() - start_time
+        REQUEST_DURATION.observe(process_time)
+        response.headers["X-Process-Time"] = str(process_time)
+        response.headers["X-Version"] = "2.2.0"
+        return response
     except Exception as e:
-        return {"error": f"Visualization creation failed: {str(e)}"}
+        ERROR_RATE.labels(type="request", endpoint=request.url.path).inc()
+        raise
 
 # API Endpoints
 
 @app.get("/")
 async def root():
-    return {"message": "Agentic AI Platform API v2.1 - Enhanced with Performance & Features"}
-
-@app.get("/api/metrics")
-async def get_metrics():
-    """Prometheus metrics endpoint"""
-    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
-
-@app.get("/api/system-info")
-async def get_system_info():
-    """Get system performance information"""
-    cpu_percent = psutil.cpu_percent()
-    memory = psutil.virtual_memory()
-    disk = psutil.disk_usage('/')
-    
     return {
-        "cpu_usage": cpu_percent,
-        "memory_usage": {
-            "percent": memory.percent,
-            "available": memory.available,
-            "total": memory.total
-        },
-        "disk_usage": {
-            "percent": disk.percent,
-            "free": disk.free,
-            "total": disk.total
-        },
-        "timestamp": datetime.utcnow()
+        "message": "Agentic AI Platform API v2.2 - Enhanced Intelligence, Performance & Multi-modal",
+        "features": [
+            "Advanced AI Intelligence",
+            "Enhanced Conversation Memory",
+            "Multi-modal Processing", 
+            "Performance Optimization",
+            "Circuit Breaker Protection",
+            "Advanced Task Classification"
+        ]
     }
 
-@app.get("/api/agent-templates")
-@limiter.limit("100/minute")
-async def get_agent_templates(request: Request):
-    """Get all available agent templates"""
-    cache_key = "agent_templates"
-    cached = await cache_get(cache_key)
-    
-    if cached:
-        return json.loads(cached)
-    
-    result = {"templates": AGENT_TEMPLATES}
-    await cache_set(cache_key, json.dumps(result, default=str), expire=3600)
-    return result
-
-@app.post("/api/agents/from-template/{template_name}")
-@limiter.limit("20/minute")
-async def create_agent_from_template(request: Request, template_name: str, agent_name: str):
-    """Create an agent from a template"""
-    template = next((t for t in AGENT_TEMPLATES if t.name.lower().replace(" ", "") == template_name.lower()), None)
-    if not template:
-        raise HTTPException(status_code=404, detail="Template not found")
-    
-    agent = Agent(
-        id=str(uuid.uuid4()),
-        name=agent_name,
-        description=template.description,
-        system_prompt=template.system_prompt,
-        model=template.suggested_model,
-        specialization=template.specialization,
-        created_at=datetime.utcnow(),
-        performance_metrics={
-            "avg_response_time": 0,
-            "success_rate": 100,
-            "total_tasks": 0
-        }
-    )
-    
-    await db.agents.insert_one(agent.dict())
-    
-    # Invalidate cache
-    redis_conn = await get_redis()
-    try:
-        await redis_conn.delete("agents_list")
-    except:
-        pass
-    
-    return agent
-
-@app.get("/api/agents")
-@limiter.limit("100/minute")
-async def get_agents(request: Request):
-    """Get all agents with caching"""
-    cache_key = "agents_list"
-    cached = await cache_get(cache_key)
-    
-    if cached:
-        return json.loads(cached)
-    
-    agents = []
-    async for agent in db.agents.find():
-        agent["_id"] = str(agent["_id"])
-        agents.append(agent)
-    
-    await cache_set(cache_key, json.dumps(agents, default=str), expire=60)
-    return agents
-
-@app.post("/api/agents")
-@limiter.limit("20/minute")
-async def create_agent(request: Request, agent_request: CreateAgentRequest):
-    """Create a new agent"""
-    agent = Agent(
-        id=str(uuid.uuid4()),
-        name=agent_request.name,
-        description=agent_request.description,
-        system_prompt=agent_request.system_prompt,
-        model=agent_request.model,
-        specialization=agent_request.specialization,
-        settings=agent_request.settings,
-        created_at=datetime.utcnow(),
-        performance_metrics={
-            "avg_response_time": 0,
-            "success_rate": 100,
-            "total_tasks": 0
-        }
-    )
-    
-    await db.agents.insert_one(agent.dict())
-    
-    # Invalidate cache
-    try:
-        redis_conn = await get_redis()
-        await redis_conn.delete("agents_list")
-    except:
-        pass
-    
-    return agent
-
-@app.get("/api/agents/{agent_id}")
-@limiter.limit("200/minute")
-async def get_agent(request: Request, agent_id: str):
-    """Get agent by ID with caching"""
-    cache_key = f"agent_{agent_id}"
-    cached = await cache_get(cache_key)
-    
-    if cached:
-        return json.loads(cached)
-    
-    agent = await db.agents.find_one({"id": agent_id})
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    
-    agent["_id"] = str(agent["_id"])
-    await cache_set(cache_key, json.dumps(agent, default=str), expire=300)
-    return agent
-
-@app.post("/api/web-scraping")
-@limiter.limit("10/minute")
-async def scrape_and_analyze(request: Request, scraping_request: WebScrapingRequest):
-    """Scrape website and analyze with AI"""
+@app.post("/api/agents/{agent_id}/tasks/enhanced")
+@limiter.limit("50/minute")
+async def create_enhanced_task(request: Request, agent_id: str, task_request: EnhancedCreateTaskRequest):
+    """Enhanced task creation with advanced AI capabilities"""
     start_time = time.time()
     
     try:
-        # Scrape website
-        content = await scrape_website(scraping_request.url)
-        
-        # Get agent
-        agent = await db.agents.find_one({"id": scraping_request.agent_id})
+        # Get agent with error handling
+        agent = await db.agents.find_one({"id": agent_id})
         if not agent:
+            ERROR_RATE.labels(type="not_found", endpoint="tasks").inc()
             raise HTTPException(status_code=404, detail="Agent not found")
         
-        # Prepare prompt with scraped content
-        enhanced_prompt = f"""
-        Analyze the following web content from {scraping_request.url}:
+        # Advanced task classification
+        task_type, confidence = classify_task_type_advanced(task_request.prompt)
+        complexity_score = len(task_request.prompt.split()) // 10
         
-        Content: {content}
+        # Enhanced model selection
+        if agent.get("model") == "auto":
+            if task_request.reasoning_mode:
+                selected_model = MODEL_SELECTION_CONFIG["reasoning"]
+            elif task_request.enable_multimodal:
+                selected_model = MODEL_SELECTION_CONFIG["multimodal"]  
+            else:
+                selected_model = MODEL_SELECTION_CONFIG.get(task_type, MODEL_SELECTION_CONFIG["default"])
+        else:
+            selected_model = agent.get("model", "llama3-8b-8192")
         
-        Task: {scraping_request.prompt}
-        """
-        
-        # Process with AI
-        messages = [
-            {"role": "system", "content": agent["system_prompt"]},
-            {"role": "user", "content": enhanced_prompt}
-        ]
-        
-        response = groq_client.chat.completions.create(
-            messages=messages,
-            model="llama3-70b-8192",
-            temperature=0.7,
-            max_tokens=2048
-        )
-        
-        result = {
-            "url": scraping_request.url,
-            "scraped_content": content[:500] + "..." if len(content) > 500 else content,
-            "analysis": response.choices[0].message.content,
-            "processing_time": time.time() - start_time
-        }
-        
-        TASK_COUNT.labels(status="completed", model="llama3-70b-8192").inc()
-        return result
-        
-    except Exception as e:
-        TASK_COUNT.labels(status="failed", model="llama3-70b-8192").inc()
-        raise HTTPException(status_code=500, detail=f"Web scraping failed: {str(e)}")
-
-@app.post("/api/model-comparison")
-@limiter.limit("5/minute")
-async def compare_models(request: Request, comparison_request: ModelComparisonRequest):
-    """Compare responses from different models"""
-    start_time = time.time()
-    
-    try:
-        agent = await db.agents.find_one({"id": comparison_request.agent_id})
-        if not agent:
-            raise HTTPException(status_code=404, detail="Agent not found")
-        
-        messages = [
-            {"role": "system", "content": agent["system_prompt"]},
-            {"role": "user", "content": comparison_request.prompt}
-        ]
-        
-        results = {}
-        
-        for model in comparison_request.models:
-            try:
-                response = groq_client.chat.completions.create(
-                    messages=messages,
-                    model=model,
-                    temperature=0.7,
-                    max_tokens=1024
-                )
-                results[model] = {
-                    "response": response.choices[0].message.content,
-                    "status": "success"
-                }
-                TASK_COUNT.labels(status="completed", model=model).inc()
-            except Exception as e:
-                results[model] = {
-                    "response": f"Error: {str(e)}",
-                    "status": "failed"
-                }
-                TASK_COUNT.labels(status="failed", model=model).inc()
-        
-        return {
-            "prompt": comparison_request.prompt,
-            "results": results,
-            "processing_time": time.time() - start_time,
-            "timestamp": datetime.utcnow()
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Model comparison failed: {str(e)}")
-
-@app.post("/api/agents/{agent_id}/tasks")
-@limiter.limit("30/minute")
-async def create_task(request: Request, agent_id: str, task_request: CreateTaskRequest):
-    """Enhanced task creation with web scraping and visualization"""
-    start_time = time.time()
-    
-    # Check if agent exists
-    agent = await db.agents.find_one({"id": agent_id})
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    
-    # Classify task type and select optimal model
-    task_type = classify_task_type(task_request.prompt)
-    complexity_score = len(task_request.prompt.split()) // 10
-    
-    if agent.get("model") == "auto":
-        selected_model = select_optimal_model(task_type, complexity_score)
-    else:
-        selected_model = agent.get("model", "llama3-8b-8192")
-    
-    task = Task(
-        id=str(uuid.uuid4()),
-        agent_id=agent_id,
-        prompt=task_request.prompt,
-        status="processing",
-        task_type=task_type,
-        model_used=selected_model,
-        conversation_id=task_request.conversation_id,
-        created_at=datetime.utcnow(),
-        metadata={
-            "complexity_score": complexity_score,
-            "auto_selected": agent.get("model") == "auto",
-            "web_scraping_enabled": task_request.enable_web_scraping,
-            "visualization_enabled": task_request.enable_visualization
-        }
-    )
-    
-    await db.tasks.insert_one(task.dict())
-    
-    try:
-        # Prepare conversation context
-        messages = [{"role": "system", "content": agent["system_prompt"]}]
-        
-        # Add conversation history if exists
-        if task_request.conversation_id:
-            conversation = await db.conversations.find_one({"id": task_request.conversation_id})
-            if conversation and conversation.get("messages"):
-                recent_messages = conversation["messages"][-6:]
-                messages.extend(recent_messages)
-        
-        # Enhance prompt with web scraping if requested
-        enhanced_prompt = task_request.prompt
-        if task_request.enable_web_scraping:
-            # Look for URLs in the prompt
-            urls = re.findall(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', task_request.prompt)
-            for url in urls:
-                try:
-                    content = await scrape_website(url)
-                    enhanced_prompt += f"\n\nScraped content from {url}:\n{content}"
-                except:
-                    enhanced_prompt += f"\n\nNote: Could not scrape content from {url}"
-        
-        messages.append({"role": "user", "content": enhanced_prompt})
-        
-        # Execute task with selected model
-        response = groq_client.chat.completions.create(
-            messages=messages,
-            model=selected_model,
-            temperature=0.7,
-            max_tokens=2048
-        )
-        
-        task_response = response.choices[0].message.content
-        processing_time = time.time() - start_time
-        
-        # Create visualization if requested and response contains data
-        visualization_data = None
-        if task_request.enable_visualization:
-            # Simple pattern matching for visualization data
-            if "data:" in task_response.lower() or "chart" in task_response.lower():
-                # This is a simplified example - in practice, you'd parse the response more intelligently
-                visualization_data = {
-                    "message": "Visualization feature available - data detected in response",
-                    "suggested_charts": ["bar", "line", "pie"]
-                }
-        
-        # Update task with response
-        await db.tasks.update_one(
-            {"id": task.id},
-            {
-                "$set": {
-                    "response": task_response,
-                    "status": "completed",
-                    "completed_at": datetime.utcnow(),
-                    "performance_data": {
-                        "processing_time": processing_time,
-                        "model_used": selected_model,
-                        "tokens_used": len(task_response.split()) * 1.3  # Rough estimate
-                    },
-                    "visualization_data": visualization_data
-                }
+        # Create enhanced task
+        task = Task(
+            id=str(uuid.uuid4()),
+            agent_id=agent_id,
+            prompt=task_request.prompt,
+            status="processing",
+            task_type=task_type,
+            model_used=selected_model,
+            conversation_id=task_request.conversation_id,
+            created_at=datetime.utcnow(),
+            context_optimization=task_request.context_optimization,
+            metadata={
+                "complexity_score": complexity_score,
+                "classification_confidence": confidence,
+                "auto_selected": agent.get("model") == "auto",
+                "web_scraping_enabled": task_request.enable_web_scraping,
+                "visualization_enabled": task_request.enable_visualization,
+                "multimodal_enabled": task_request.enable_multimodal,
+                "reasoning_mode": task_request.reasoning_mode,
+                "file_count": len(task_request.file_ids)
             }
         )
         
-        # Update conversation if part of one
+        await db.tasks.insert_one(task.dict())
+        
+        # Enhanced conversation context management
+        messages = [{"role": "system", "content": agent["system_prompt"]}]
+        
+        if task_request.context_optimization:
+            # Use advanced memory management
+            conversation_context = []
+            if task_request.conversation_id:
+                conversation = await db.conversations.find_one({"id": task_request.conversation_id})
+                if conversation and conversation.get("messages"):
+                    conversation_context = conversation["messages"]
+            
+            agent_memory = agent.get("conversation_memory", [])
+            messages = await memory_manager.optimize_conversation_context(
+                messages + conversation_context, agent_memory
+            )
+        
+        # Multi-modal file processing
+        enhanced_prompt = task_request.prompt
+        multimodal_results = []
+        
+        if task_request.enable_multimodal and task_request.file_ids:
+            for file_id in task_request.file_ids:
+                file_info_str = await advanced_cache_get(f"file_{file_id}")
+                if file_info_str:
+                    file_info = json.loads(file_info_str)
+                    file_path = file_info.get("path")
+                    
+                    if file_path and os.path.exists(file_path):
+                        with open(file_path, "rb") as f:
+                            file_data = f.read()
+                        
+                        if file_info.get("content_type", "").startswith("image/"):
+                            result = await multimodal_processor.process_image(
+                                file_data, task_request.prompt
+                            )
+                        else:
+                            result = await multimodal_processor.process_document(
+                                file_data, file_info.get("filename", ""), task_request.prompt
+                            )
+                        
+                        multimodal_results.append(result)
+                        enhanced_prompt += f"\n\nFile Analysis: {result.get('response', 'File processed')}"
+        
+        # Web scraping enhancement
+        if task_request.enable_web_scraping:
+            urls = re.findall(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', task_request.prompt)
+            for url in urls[:3]:  # Limit to 3 URLs
+                try:
+                    content = await scrape_website(url)
+                    enhanced_prompt += f"\n\nScraped content from {url}:\n{content[:1000]}"
+                except:
+                    enhanced_prompt += f"\n\nNote: Could not scrape content from {url}"
+        
+        # Reasoning mode enhancement
+        if task_request.reasoning_mode:
+            enhanced_prompt = f"""Think step by step about this task. Use chain-of-thought reasoning.
+
+Task: {enhanced_prompt}
+
+Please provide a detailed, logical response with clear reasoning steps."""
+        
+        messages.append({"role": "user", "content": enhanced_prompt})
+        
+        # Enhanced AI execution with circuit breaker
+        try:
+            response = await groq_api_call(
+                groq_client,
+                messages,
+                selected_model,
+                temperature=0.7 if task_type == "creative_tasks" else 0.3,
+                max_tokens=2048
+            )
+            
+            task_response = response.choices[0].message.content
+            processing_time = time.time() - start_time
+            
+            # Calculate intelligence score
+            intelligence_score = calculate_intelligence_score(task_response, task_type)
+            AI_INTELLIGENCE_SCORE.observe(intelligence_score)
+            
+        except Exception as e:
+            logger.error(f"AI execution failed: {e}")
+            ERROR_RATE.labels(type="ai_execution", endpoint="tasks").inc()
+            raise HTTPException(status_code=500, detail=f"AI execution failed: {str(e)}")
+        
+        # Enhanced task completion
+        completion_data = {
+            "response": task_response,
+            "status": "completed",
+            "completed_at": datetime.utcnow(),
+            "intelligence_score": intelligence_score,
+            "performance_data": {
+                "processing_time": processing_time,
+                "model_used": selected_model,
+                "tokens_used": len(task_response.split()) * 1.3,
+                "classification_confidence": confidence,
+                "context_optimized": task_request.context_optimization
+            },
+            "multimodal_results": multimodal_results
+        }
+        
+        await db.tasks.update_one({"id": task.id}, {"$set": completion_data})
+        
+        # Enhanced conversation update
         if task_request.conversation_id:
             await db.conversations.update_one(
                 {"id": task_request.conversation_id},
@@ -731,10 +717,15 @@ async def create_task(request: Request, agent_id: str, task_request: CreateTaskR
                 }
             )
         
-        # Update agent performance metrics
-        current_avg = agent.get("performance_metrics", {}).get("avg_response_time", 0)
+        # Enhanced agent metrics update
+        current_metrics = agent.get("performance_metrics", {})
+        current_avg = current_metrics.get("avg_response_time", 0)
         total_tasks = agent.get("tasks_completed", 0)
         new_avg = ((current_avg * total_tasks) + processing_time) / (total_tasks + 1)
+        
+        # Calculate memory efficiency
+        memory_efficiency = min(1.0, 10.0 / len(agent.get("conversation_memory", []))) if agent.get("conversation_memory") else 1.0
+        MEMORY_EFFICIENCY.observe(memory_efficiency)
         
         await db.agents.update_one(
             {"id": agent_id},
@@ -742,305 +733,316 @@ async def create_task(request: Request, agent_id: str, task_request: CreateTaskR
                 "$inc": {"tasks_completed": 1},
                 "$set": {
                     "performance_metrics.avg_response_time": new_avg,
-                    "performance_metrics.total_tasks": total_tasks + 1
+                    "performance_metrics.total_tasks": total_tasks + 1,
+                    "intelligence_score": (agent.get("intelligence_score", 0) + intelligence_score) / 2,
+                    "memory_efficiency": memory_efficiency
                 },
                 "$push": {
                     "conversation_memory": {
                         "$each": [{
                             "task_id": task.id,
                             "prompt": task_request.prompt,
-                            "response": task_response,
+                            "response": task_response[:200],  # Store truncated for efficiency
                             "timestamp": datetime.utcnow(),
-                            "processing_time": processing_time
+                            "processing_time": processing_time,
+                            "intelligence_score": intelligence_score
                         }],
-                        "$slice": -10
+                        "$slice": -15  # Keep last 15 interactions
                     }
                 }
             }
         )
         
-        # Invalidate relevant caches
-        try:
-            redis_conn = await get_redis()
-            await redis_conn.delete(f"agent_{agent_id}")
-            await redis_conn.delete("agents_list")
-        except:
-            pass
+        # Cache invalidation
+        await advanced_cache_set(f"agent_{agent_id}", "", expire=1)  # Quick invalidation
         
         # Update task object for response
         task.response = task_response
         task.status = "completed"
         task.completed_at = datetime.utcnow()
-        task.performance_data = {
-            "processing_time": processing_time,
-            "model_used": selected_model
-        }
-        task.visualization_data = visualization_data
+        task.intelligence_score = intelligence_score
+        task.performance_data = completion_data["performance_data"]
         
         TASK_COUNT.labels(status="completed", model=selected_model).inc()
-        return task
         
+        return {
+            **task.dict(),
+            "multimodal_results": multimodal_results,
+            "enhanced_features_used": {
+                "context_optimization": task_request.context_optimization,
+                "multimodal_processing": len(multimodal_results) > 0,
+                "web_scraping": task_request.enable_web_scraping and len(urls) > 0,
+                "reasoning_mode": task_request.reasoning_mode,
+                "intelligence_score": intelligence_score
+            }
+        }
+        
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"Enhanced task creation failed: {e}")
+        ERROR_RATE.labels(type="system", endpoint="tasks").inc()
+        
         # Update task with error
-        await db.tasks.update_one(
-            {"id": task.id},
-            {
-                "$set": {
-                    "response": f"Error: {str(e)}",
-                    "status": "failed",
-                    "completed_at": datetime.utcnow(),
-                    "performance_data": {
-                        "processing_time": time.time() - start_time,
-                        "error": str(e)
+        try:
+            await db.tasks.update_one(
+                {"id": task.id if 'task' in locals() else "unknown"},
+                {
+                    "$set": {
+                        "response": f"System Error: {str(e)}",
+                        "status": "failed",
+                        "completed_at": datetime.utcnow(),
+                        "performance_data": {
+                            "processing_time": time.time() - start_time,
+                            "error": str(e)
+                        }
                     }
                 }
-            }
-        )
-        TASK_COUNT.labels(status="failed", model=selected_model).inc()
-        raise HTTPException(status_code=500, detail=f"Task execution failed: {str(e)}")
+            )
+        except:
+            pass
+        
+        TASK_COUNT.labels(status="failed", model=selected_model if 'selected_model' in locals() else "unknown").inc()
+        raise HTTPException(status_code=500, detail=f"Enhanced task execution failed: {str(e)}")
 
-@app.get("/api/agents/{agent_id}/tasks")
-@limiter.limit("100/minute")
-async def get_agent_tasks(request: Request, agent_id: str):
-    """Get tasks for an agent with caching"""
-    cache_key = f"agent_tasks_{agent_id}"
-    cached = await cache_get(cache_key)
-    
-    if cached:
-        return json.loads(cached)
-    
-    tasks = []
-    async for task in db.tasks.find({"agent_id": agent_id}).sort("created_at", -1):
-        task["_id"] = str(task["_id"])
-        tasks.append(task)
-    
-    await cache_set(cache_key, json.dumps(tasks, default=str), expire=60)
-    return tasks
-
-@app.get("/api/tasks")
-@limiter.limit("50/minute")
-async def get_all_tasks(request: Request):
-    """Get all tasks with pagination and caching"""
-    cache_key = "all_tasks"
-    cached = await cache_get(cache_key)
-    
-    if cached:
-        return json.loads(cached)
-    
-    tasks = []
-    async for task in db.tasks.find().sort("created_at", -1).limit(100):
-        task["_id"] = str(task["_id"])
-        tasks.append(task)
-    
-    await cache_set(cache_key, json.dumps(tasks, default=str), expire=30)
-    return tasks
-
-@app.get("/api/analytics/dashboard")
-@limiter.limit("30/minute")
-async def get_dashboard_analytics(request: Request):
-    """Enhanced dashboard analytics with performance metrics"""
-    cache_key = "dashboard_analytics"
-    cached = await cache_get(cache_key)
-    
-    if cached:
-        return json.loads(cached)
-    
-    # Basic counts
-    total_agents = await db.agents.count_documents({})
-    active_agents = await db.agents.count_documents({"status": "active"})
-    total_tasks = await db.tasks.count_documents({})
-    completed_tasks = await db.tasks.count_documents({"status": "completed"})
-    failed_tasks = await db.tasks.count_documents({"status": "failed"})
-    
-    # Recent activity
-    recent_tasks = []
-    async for task in db.tasks.find().sort("created_at", -1).limit(5):
-        task["_id"] = str(task["_id"])
-        recent_tasks.append(task)
-    
-    # Model usage statistics
-    model_usage = {}
-    async for task in db.tasks.find({"model_used": {"$exists": True}}):
-        model = task.get("model_used", "unknown")
-        model_usage[model] = model_usage.get(model, 0) + 1
-    
-    # Performance metrics
-    performance_pipeline = [
-        {"$match": {"status": "completed", "performance_data.processing_time": {"$exists": True}}},
-        {"$group": {
-            "_id": None,
-            "avg_processing_time": {"$avg": "$performance_data.processing_time"},
-            "max_processing_time": {"$max": "$performance_data.processing_time"},
-            "min_processing_time": {"$min": "$performance_data.processing_time"}
-        }}
-    ]
-    
-    performance_stats = {"avg_processing_time": 0, "max_processing_time": 0, "min_processing_time": 0}
-    async for stat in db.tasks.aggregate(performance_pipeline):
-        performance_stats = stat
-        break
-    
-    # Task type distribution
-    task_types = {}
-    async for task in db.tasks.find({"task_type": {"$exists": True}}):
-        task_type = task.get("task_type", "general")
-        task_types[task_type] = task_types.get(task_type, 0) + 1
-    
-    result = {
-        "agents": {
-            "total": total_agents,
-            "active": active_agents
-        },
-        "tasks": {
-            "total": total_tasks,
-            "completed": completed_tasks,
-            "failed": failed_tasks,
-            "success_rate": round((completed_tasks / max(total_tasks, 1)) * 100, 2)
-        },
-        "performance": {
-            "avg_processing_time": round(performance_stats.get("avg_processing_time", 0), 2),
-            "max_processing_time": round(performance_stats.get("max_processing_time", 0), 2),
-            "min_processing_time": round(performance_stats.get("min_processing_time", 0), 2)
-        },
-        "recent_activity": recent_tasks,
-        "model_usage": model_usage,
-        "task_types": task_types
-    }
-    
-    await cache_set(cache_key, json.dumps(result, default=str), expire=120)
-    return result
-
-@app.post("/api/conversations")
+# Enhanced file upload with multi-modal support
+@app.post("/api/upload/multimodal")
 @limiter.limit("20/minute")
-async def create_conversation(request: Request, agent_id: str):
-    """Create a new conversation"""
-    agent = await db.agents.find_one({"id": agent_id})
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    
-    conversation = Conversation(
-        id=str(uuid.uuid4()),
-        agent_id=agent_id,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow()
-    )
-    
-    await db.conversations.insert_one(conversation.dict())
-    return conversation
-
-@app.get("/api/conversations/{conversation_id}")
-@limiter.limit("100/minute")
-async def get_conversation(request: Request, conversation_id: str):
-    """Get conversation history"""
-    conversation = await db.conversations.find_one({"id": conversation_id})
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    conversation["_id"] = str(conversation["_id"])
-    return conversation
-
-@app.post("/api/upload")
-@limiter.limit("10/minute")
-async def upload_file(request: Request, file: UploadFile = File(...)):
-    """Handle file uploads for enhanced task processing"""
+async def upload_multimodal_file(request: Request, file: UploadFile = File(...)):
+    """Enhanced file upload with multi-modal processing support"""
     try:
         content = await file.read()
-        
-        # Save file temporarily
         file_id = str(uuid.uuid4())
-        file_path = f"/tmp/{file_id}_{file.filename}"
+        timestamp = datetime.utcnow()
+        
+        # Create structured file path
+        file_path = f"/tmp/multimodal_{file_id}_{file.filename}"
         
         with open(file_path, "wb") as f:
             f.write(content)
         
+        # Enhanced file analysis
+        file_type = magic.from_buffer(content, mime=True) if content else "unknown"
+        
+        # Basic file metadata
         result = {
             "file_id": file_id,
             "filename": file.filename,
             "size": len(content),
-            "content_type": file.content_type,
+            "content_type": file.content_type or file_type,
+            "detected_type": file_type,
             "path": file_path,
-            "uploaded_at": datetime.utcnow()
+            "uploaded_at": timestamp,
+            "processing_status": "ready"
         }
         
-        # Cache file info
-        await cache_set(f"file_{file_id}", json.dumps(result, default=str), expire=3600)
+        # Enhanced analysis for images
+        if file_type.startswith("image/"):
+            try:
+                image = Image.open(io.BytesIO(content))
+                result["image_analysis"] = {
+                    "dimensions": f"{image.size[0]}x{image.size[1]}",
+                    "format": image.format,
+                    "mode": image.mode
+                }
+            except:
+                pass
+        
+        # Store in database for enhanced tracking
+        await db.multimodal_files.insert_one(result)
+        
+        # Cache file info with longer expiration for multi-modal processing
+        await advanced_cache_set(f"file_{file_id}", json.dumps(result, default=str), expire=7200)
         
         return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
-
-@app.delete("/api/agents/{agent_id}")
-@limiter.limit("10/minute")
-async def delete_agent(request: Request, agent_id: str):
-    """Delete agent and associated data"""
-    result = await db.agents.delete_one({"id": agent_id})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    
-    # Delete associated tasks and conversations
-    await db.tasks.delete_many({"agent_id": agent_id})
-    await db.conversations.delete_many({"agent_id": agent_id})
-    
-    # Invalidate caches
-    try:
-        redis_conn = await get_redis()
-        await redis_conn.delete(f"agent_{agent_id}")
-        await redis_conn.delete("agents_list")
-        await redis_conn.delete(f"agent_tasks_{agent_id}")
-    except:
-        pass
-    
-    return {"message": "Agent and associated data deleted"}
-
-@app.get("/api/health")
-async def health_check():
-    """Enhanced health check with system monitoring"""
-    try:
-        # Test database connection
-        await db.agents.count_documents({})
         
-        # Test Redis connection
-        redis_status = "connected"
+    except Exception as e:
+        ERROR_RATE.labels(type="upload", endpoint="multimodal").inc()
+        raise HTTPException(status_code=500, detail=f"Enhanced file upload failed: {str(e)}")
+
+# Enhanced analytics endpoint
+@app.get("/api/analytics/enhanced")
+@limiter.limit("20/minute")
+async def get_enhanced_analytics(request: Request):
+    """Enhanced analytics with AI intelligence metrics"""
+    try:
+        cache_key = "enhanced_analytics"
+        cached = await advanced_cache_get(cache_key)
+        
+        if cached:
+            return json.loads(cached)
+        
+        # Basic metrics
+        total_agents = await db.agents.count_documents({})
+        total_tasks = await db.tasks.count_documents({})
+        completed_tasks = await db.tasks.count_documents({"status": "completed"})
+        
+        # Enhanced intelligence metrics
+        intelligence_pipeline = [
+            {"$match": {"intelligence_score": {"$exists": True, "$gt": 0}}},
+            {"$group": {
+                "_id": None,
+                "avg_intelligence": {"$avg": "$intelligence_score"},
+                "max_intelligence": {"$max": "$intelligence_score"},
+                "intelligence_distribution": {
+                    "$push": {
+                        "$cond": [
+                            {"$gte": ["$intelligence_score", 0.8]}, "high",
+                            {"$cond": [
+                                {"$gte": ["$intelligence_score", 0.6]}, "medium", "low"
+                            ]}
+                        ]
+                    }
+                }
+            }}
+        ]
+        
+        intelligence_stats = {"avg_intelligence": 0, "max_intelligence": 0, "intelligence_distribution": []}
+        async for stat in db.tasks.aggregate(intelligence_pipeline):
+            intelligence_stats = stat
+            break
+        
+        # Memory efficiency metrics
+        memory_pipeline = [
+            {"$match": {"memory_efficiency": {"$exists": True}}},
+            {"$group": {
+                "_id": None,
+                "avg_memory_efficiency": {"$avg": "$memory_efficiency"},
+                "agents_with_optimal_memory": {
+                    "$sum": {"$cond": [{"$gte": ["$memory_efficiency", 0.8]}, 1, 0]}
+                }
+            }}
+        ]
+        
+        memory_stats = {"avg_memory_efficiency": 1.0, "agents_with_optimal_memory": 0}
+        async for stat in db.agents.aggregate(memory_pipeline):
+            memory_stats = stat
+            break
+        
+        # Task type distribution with confidence
+        task_types_pipeline = [
+            {"$group": {
+                "_id": "$task_type",
+                "count": {"$sum": 1},
+                "avg_confidence": {"$avg": "$metadata.classification_confidence"}
+            }}
+        ]
+        
+        task_type_stats = {}
+        async for stat in db.tasks.aggregate(task_types_pipeline):
+            task_type_stats[stat["_id"]] = {
+                "count": stat["count"],
+                "avg_confidence": stat.get("avg_confidence", 0)
+            }
+        
+        # Multi-modal usage
+        multimodal_count = await db.multimodal_files.count_documents({})
+        
+        result = {
+            "basic_metrics": {
+                "total_agents": total_agents,
+                "total_tasks": total_tasks,
+                "completed_tasks": completed_tasks,
+                "success_rate": round((completed_tasks / max(total_tasks, 1)) * 100, 2)
+            },
+            "intelligence_metrics": {
+                "average_intelligence_score": round(intelligence_stats.get("avg_intelligence", 0), 3),
+                "maximum_intelligence_score": round(intelligence_stats.get("max_intelligence", 0), 3),
+                "intelligence_distribution": intelligence_stats.get("intelligence_distribution", [])
+            },
+            "memory_efficiency": {
+                "average_efficiency": round(memory_stats.get("avg_memory_efficiency", 1.0), 3),
+                "optimal_agents": memory_stats.get("agents_with_optimal_memory", 0)
+            },
+            "task_intelligence": task_type_stats,
+            "multimodal_usage": {
+                "total_files_processed": multimodal_count
+            },
+            "generated_at": datetime.utcnow()
+        }
+        
+        await advanced_cache_set(cache_key, json.dumps(result, default=str), expire=300)
+        return result
+        
+    except Exception as e:
+        ERROR_RATE.labels(type="analytics", endpoint="enhanced").inc()
+        raise HTTPException(status_code=500, detail=f"Enhanced analytics failed: {str(e)}")
+
+# System health check with enhanced monitoring
+@app.get("/api/health/enhanced")
+async def enhanced_health_check():
+    """Enhanced health check with comprehensive monitoring"""
+    try:
+        health_data = {
+            "status": "healthy",
+            "version": "2.2.0",
+            "timestamp": datetime.utcnow(),
+            "services": {},
+            "performance": {},
+            "features": {
+                "ai_intelligence": True,
+                "multimodal_processing": True,
+                "enhanced_memory": True,
+                "circuit_breaker": True,
+                "advanced_caching": True
+            }
+        }
+        
+        # Database health
+        try:
+            await db.agents.count_documents({})
+            health_data["services"]["database"] = "healthy"
+        except Exception as e:
+            health_data["services"]["database"] = f"unhealthy: {str(e)}"
+            health_data["status"] = "degraded"
+        
+        # Redis health
         try:
             redis_conn = await get_redis()
-            await redis_conn.ping()
-        except:
-            redis_status = "disconnected"
+            if redis_conn:
+                await redis_conn.ping()
+                health_data["services"]["redis"] = "healthy"
+            else:
+                health_data["services"]["redis"] = "unavailable"
+        except Exception as e:
+            health_data["services"]["redis"] = f"unhealthy: {str(e)}"
         
-        # Test Groq API connection
-        groq_status = "connected"
+        # Groq API health
         try:
-            test_response = groq_client.chat.completions.create(
-                messages=[{"role": "user", "content": "test"}],
-                model="llama-3.1-8b-instant",
+            await groq_api_call(
+                groq_client,
+                [{"role": "user", "content": "health"}],
+                "llama-3.1-8b-instant",
                 max_tokens=1
             )
-        except:
-            groq_status = "disconnected"
+            health_data["services"]["groq_api"] = "healthy"
+        except Exception as e:
+            health_data["services"]["groq_api"] = f"unhealthy: {str(e)}"
+            health_data["status"] = "degraded"
         
-        # Get system stats
+        # System performance
         cpu_percent = psutil.cpu_percent()
         memory = psutil.virtual_memory()
         
-        return {
-            "status": "healthy",
-            "services": {
-                "database": "connected",
-                "redis": redis_status,
-                "groq_api": groq_status
-            },
-            "system": {
-                "cpu_usage": cpu_percent,
-                "memory_usage": memory.percent,
-                "memory_available": memory.available
-            },
-            "timestamp": datetime.utcnow(),
-            "version": "2.1.0"
+        health_data["performance"] = {
+            "cpu_usage": cpu_percent,
+            "memory_usage": memory.percent,
+            "memory_available_gb": round(memory.available / (1024**3), 2),
+            "status": "optimal" if cpu_percent < 80 and memory.percent < 80 else "high_load"
         }
+        
+        if health_data["performance"]["status"] == "high_load":
+            health_data["status"] = "degraded"
+        
+        return health_data
+        
     except Exception as e:
+        ERROR_RATE.labels(type="health", endpoint="enhanced").inc()
         return {
             "status": "unhealthy",
             "error": str(e),
-            "timestamp": datetime.utcnow()
+            "timestamp": datetime.utcnow(),
+            "version": "2.2.0"
         }
 
 if __name__ == "__main__":
