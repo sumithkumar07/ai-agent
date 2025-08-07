@@ -364,28 +364,44 @@ const AppContent = () => {
     }
   };
 
-  const executeTask = async (agentId, conversationId = null) => {
-    if (!taskPrompt.trim()) return;
-    
+  const executeTask = async (agentId, taskData, conversationId = null) => {
     setLoading(true);
     setError('');
     
     try {
-      await axios.post(`${API_BASE}/api/agents/${agentId}/tasks`, {
-        agent_id: agentId,
-        prompt: taskPrompt,
-        conversation_id: conversationId,
-        enable_web_scraping: true,
-        enable_visualization: true
+      // Use enhanced task endpoint if advanced features are enabled
+      const useEnhanced = taskData.enable_multimodal || taskData.reasoning_mode || taskData.context_optimization;
+      const endpoint = useEnhanced ? 
+        `${API_BASE}/api/agents/${agentId}/tasks/enhanced` : 
+        `${API_BASE}/api/agents/${agentId}/tasks`;
+      
+      await axios.post(endpoint, {
+        ...taskData,
+        conversation_id: conversationId
       });
-      setTaskPrompt('');
+      
       fetchAllTasks();
       fetchAgents();
+      fetchEnhancedFeatures();
     } catch (error) {
       console.error('Error executing task:', error);
       setError('Failed to execute task. Please try again.');
     }
     setLoading(false);
+  };
+
+  const executeBasicTask = async (agentId, conversationId = null) => {
+    if (!taskPrompt.trim()) return;
+    
+    await executeTask(agentId, {
+      agent_id: agentId,
+      prompt: taskPrompt,
+      conversation_id: conversationId,
+      enable_web_scraping: true,
+      enable_visualization: true,
+      context_optimization: true
+    });
+    setTaskPrompt('');
   };
 
   const handleQuickAction = (action) => {
