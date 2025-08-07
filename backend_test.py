@@ -1,18 +1,31 @@
 #!/usr/bin/env python3
 """
-Backend API Testing for Agentic AI Platform
-Tests all backend endpoints and identifies issues
+Enhanced Backend API Testing for Agentic AI Platform v2.0
+Tests all backend endpoints including new enhanced features:
+- Smart Model Selection
+- Agent Templates
+- Conversation Support
+- Analytics Dashboard
+- File Upload
+- Health Check
 """
 
 import requests
 import json
 import time
 import os
+import io
 from datetime import datetime
 
 # Get backend URL from environment
 BACKEND_URL = os.getenv('REACT_APP_BACKEND_URL', 'http://localhost:8001')
 API_BASE = f"{BACKEND_URL}/api"
+
+# Test data for enhanced features
+CREATIVE_TASK = "Write a compelling blog post about the future of artificial intelligence in healthcare"
+ANALYSIS_TASK = "Analyze the market trends for electric vehicles and provide insights on growth opportunities"
+CODING_TASK = "Create a Python function to calculate fibonacci numbers with memoization"
+CONVERSATION_TASK = "Hello, I'd like to discuss project management strategies"
 
 def test_connection():
     """Test basic connection to backend"""
