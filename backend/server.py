@@ -27,7 +27,10 @@ client = AsyncIOMotorClient(os.getenv("MONGO_URL"))
 db = client.agentic_ai
 
 # Groq client setup
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+groq_client = Groq(
+    api_key=os.getenv("GROQ_API_KEY"),
+    base_url=os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+)
 
 # Pydantic models
 class Agent(BaseModel):
