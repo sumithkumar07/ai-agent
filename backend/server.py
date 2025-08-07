@@ -80,16 +80,19 @@ def select_optimal_model(task_type: str, complexity_score: int = 1) -> str:
     
     return base_model
 
-# Pydantic models
+# Enhanced Pydantic models
 class Agent(BaseModel):
     id: str
     name: str
     description: str
     system_prompt: str
-    model: str = "llama3-8b-8192"
+    model: str = "auto"  # Now supports "auto" for smart selection
     status: str = "active"
     created_at: datetime
     tasks_completed: int = 0
+    conversation_memory: List[Dict[str, Any]] = []  # For multi-turn conversations
+    specialization: str = "general"  # Agent specialization type
+    settings: Dict[str, Any] = {}  # Additional agent settings
 
 class Task(BaseModel):
     id: str
@@ -99,16 +102,98 @@ class Task(BaseModel):
     status: str = "pending"
     created_at: datetime
     completed_at: Optional[datetime] = None
+    task_type: str = "general"  # Classified task type
+    model_used: str = "llama3-8b-8192"  # Model actually used
+    conversation_id: Optional[str] = None  # For multi-turn conversations
+    metadata: Dict[str, Any] = {}  # Additional task metadata
+
+class Conversation(BaseModel):
+    id: str
+    agent_id: str
+    messages: List[Dict[str, Any]] = []
+    created_at: datetime
+    updated_at: datetime
+    status: str = "active"
 
 class CreateAgentRequest(BaseModel):
     name: str
     description: str
     system_prompt: str
-    model: str = "llama3-8b-8192"
+    model: str = "auto"
+    specialization: str = "general"
+    settings: Dict[str, Any] = {}
 
 class CreateTaskRequest(BaseModel):
     agent_id: str
     prompt: str
+    conversation_id: Optional[str] = None
+
+class AgentTemplate(BaseModel):
+    name: str
+    description: str
+    system_prompt: str
+    specialization: str
+    suggested_model: str
+    icon: str = "🤖"
+    category: str = "general"
+
+# Pre-built Agent Templates
+AGENT_TEMPLATES = [
+    AgentTemplate(
+        name="Content Writer",
+        description="Creates engaging blog posts, articles, and marketing content",
+        system_prompt="You are an expert content writer specializing in creating engaging, SEO-optimized content. Write in a clear, conversational tone and provide actionable insights.",
+        specialization="creative_tasks",
+        suggested_model="llama3-70b-8192",
+        icon="✍️",
+        category="content"
+    ),
+    AgentTemplate(
+        name="Data Analyst", 
+        description="Analyzes data, creates insights, and provides recommendations",
+        system_prompt="You are a skilled data analyst. Provide clear, data-driven insights with actionable recommendations. Use charts and visualizations when helpful.",
+        specialization="analysis_tasks",
+        suggested_model="mixtral-8x7b-32768",
+        icon="📊",
+        category="analysis"
+    ),
+    AgentTemplate(
+        name="Code Assistant",
+        description="Helps with programming, debugging, and technical solutions",
+        system_prompt="You are an expert programmer. Provide clean, efficient code with clear explanations. Focus on best practices and maintainable solutions.",
+        specialization="coding_tasks", 
+        suggested_model="llama3-70b-8192",
+        icon="💻",
+        category="development"
+    ),
+    AgentTemplate(
+        name="Customer Support",
+        description="Provides helpful, empathetic customer service responses",
+        system_prompt="You are a friendly customer support representative. Be helpful, empathetic, and solution-focused. Always maintain a professional yet warm tone.",
+        specialization="conversation",
+        suggested_model="llama3-8b-8192",
+        icon="🎧",
+        category="support"
+    ),
+    AgentTemplate(
+        name="Research Assistant",
+        description="Conducts thorough research and provides comprehensive summaries",
+        system_prompt="You are a research expert. Provide comprehensive, well-sourced information with clear analysis and actionable insights.",
+        specialization="analysis_tasks",
+        suggested_model="mixtral-8x7b-32768",
+        icon="🔍",
+        category="research"
+    ),
+    AgentTemplate(
+        name="Marketing Strategist",
+        description="Develops marketing campaigns and growth strategies",
+        system_prompt="You are a marketing strategist. Create data-driven marketing strategies with clear objectives, target audiences, and measurable outcomes.",
+        specialization="creative_tasks",
+        suggested_model="llama3-70b-8192",
+        icon="🎯",
+        category="marketing"
+    )
+]
 
 @app.get("/")
 async def root():
