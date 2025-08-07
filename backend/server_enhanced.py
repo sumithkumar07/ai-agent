@@ -490,6 +490,27 @@ async def cleanup_resources():
     if redis_client:
         await redis_client.close()
 
+async def scrape_website(url: str) -> str:
+    """Scrape website content"""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Remove script and style elements
+            for script in soup(["script", "style"]):
+                script.extract()
+            
+            # Get text and clean it
+            text = soup.get_text()
+            lines = (line.strip() for line in text.splitlines())
+            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+            text = ' '.join(chunk for chunk in chunks if chunk)
+            
+            return text[:5000]  # Limit to 5000 characters
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to scrape website: {str(e)}")
+
 # Enhanced middleware
 @app.middleware("http")
 async def enhanced_process_time_header(request: Request, call_next):
