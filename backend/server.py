@@ -292,25 +292,55 @@ async def create_task(agent_id: str, request: CreateTaskRequest):
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     
+    # Classify task type and select optimal model
+    task_type = classify_task_type(request.prompt)
+    complexity_score = len(request.prompt.split()) // 10  # Simple complexity estimation
+    
+    # Use agent's preferred model or auto-select
+    if agent.get("model") == "auto":
+        selected_model = select_optimal_model(task_type, complexity_score)
+    else:
+        selected_model = agent.get("model", "llama3-8b-8192")
+    
     task = Task(
         id=str(uuid.uuid4()),
         agent_id=agent_id,
         prompt=request.prompt,
         status="processing",
-        created_at=datetime.utcnow()
+        task_type=task_type,
+        model_used=selected_model,
+        conversation_id=request.conversation_id,
+        created_at=datetime.utcnow(),
+        metadata={
+            "complexity_score": complexity_score,
+            "auto_selected": agent.get("model") == "auto"
+        }
     )
     
     # Insert task first
     await db.tasks.insert_one(task.dict())
     
     try:
-        # Execute task with Groq
+        # Prepare conversation context for multi-turn dialogue
+        messages = [{"role": "system", "content": agent["system_prompt"]}]
+        
+        # Add conversation history if this is part of a conversation
+        if request.conversation_id:
+            conversation = await db.conversations.find_one({"id": request.conversation_id})
+            if conversation and conversation.get("messages"):
+                # Add last few messages for context (limit to prevent token overflow)
+                recent_messages = conversation["messages"][-6:]  # Last 3 exchanges
+                messages.extend(recent_messages)
+        
+        # Add current user message
+        messages.append({"role": "user", "content": request.prompt})
+        
+        # Execute task with Groq using selected model
         response = groq_client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": agent["system_prompt"]},
-                {"role": "user", "content": request.prompt}
-            ],
-            model=agent["model"]
+            messages=messages,
+            model=selected_model,
+            temperature=0.7,
+            max_tokens=2048
         )
         
         task_response = response.choices[0].message.content
@@ -327,11 +357,49 @@ async def create_task(agent_id: str, request: CreateTaskRequest):
             }
         )
         
-        # Update agent task count
-        await db.agents.update_one(
-            {"id": agent_id},
-            {"$inc": {"tasks_completed": 1}}
-        )
+        # Update conversation if part of one
+        if request.conversation_id:
+            await db.conversations.update_one(
+                {"id": request.conversation_id},
+                {
+                    "$push": {
+                        "messages": {
+                            "$each": [
+                                {"role": "user", "content": request.prompt},
+                                {"role": "assistant", "content": task_response}
+                            ]
+                        }
+                    },
+                    "$set": {"updated_at": datetime.utcnow()}
+                }
+            )
+        
+        # Update agent task count and add to memory
+        update_data = {"$inc": {"tasks_completed": 1}}
+        if len(agent.get("conversation_memory", [])) < 10:  # Keep last 10 interactions
+            update_data["$push"] = {
+                "conversation_memory": {
+                    "task_id": task.id,
+                    "prompt": request.prompt,
+                    "response": task_response,
+                    "timestamp": datetime.utcnow()
+                }
+            }
+        else:
+            # Replace oldest memory
+            update_data["$push"] = {
+                "conversation_memory": {
+                    "$each": [{
+                        "task_id": task.id,
+                        "prompt": request.prompt,
+                        "response": task_response,
+                        "timestamp": datetime.utcnow()
+                    }],
+                    "$slice": -10  # Keep only last 10
+                }
+            }
+        
+        await db.agents.update_one({"id": agent_id}, update_data)
         
         task.response = task_response
         task.status = "completed"
