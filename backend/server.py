@@ -521,7 +521,7 @@ async def health_check():
         # Test Groq API connection
         test_response = groq_client.chat.completions.create(
             messages=[{"role": "user", "content": "test"}],
-            model="llama3-8b-8192",
+            model="llama-3.1-8b-instant",  # Updated to available model
             max_tokens=10
         )
         
