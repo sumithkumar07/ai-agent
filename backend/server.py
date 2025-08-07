@@ -7,7 +7,7 @@ import os
 from dotenv import load_dotenv
 import uuid
 from datetime import datetime
-import openai
+from groq import Groq
 
 load_dotenv()
 
@@ -26,11 +26,8 @@ app.add_middleware(
 client = AsyncIOMotorClient(os.getenv("MONGO_URL"))
 db = client.agentic_ai
 
-# Groq client setup using OpenAI compatibility
-groq_client = openai.OpenAI(
-    base_url=os.getenv("GROQ_BASE_URL"),
-    api_key=os.getenv("GROQ_API_KEY")
-)
+# Groq client setup
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 # Pydantic models
 class Agent(BaseModel):
