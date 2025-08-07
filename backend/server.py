@@ -437,6 +437,66 @@ async def get_all_tasks():
         tasks.append(task)
     return tasks
 
+@app.get("/api/analytics/dashboard")
+async def get_dashboard_analytics():
+    """Get dashboard analytics and statistics"""
+    total_agents = await db.agents.count_documents({})
+    active_agents = await db.agents.count_documents({"status": "active"})
+    total_tasks = await db.tasks.count_documents({})
+    completed_tasks = await db.tasks.count_documents({"status": "completed"})
+    failed_tasks = await db.tasks.count_documents({"status": "failed"})
+    
+    # Get recent activity
+    recent_tasks = []
+    async for task in db.tasks.find().sort("created_at", -1).limit(5):
+        task["_id"] = str(task["_id"])
+        recent_tasks.append(task)
+    
+    # Get model usage statistics
+    model_usage = {}
+    async for task in db.tasks.find({"model_used": {"$exists": True}}):
+        model = task.get("model_used", "unknown")
+        model_usage[model] = model_usage.get(model, 0) + 1
+    
+    return {
+        "agents": {
+            "total": total_agents,
+            "active": active_agents
+        },
+        "tasks": {
+            "total": total_tasks,
+            "completed": completed_tasks,
+            "failed": failed_tasks,
+            "success_rate": round((completed_tasks / max(total_tasks, 1)) * 100, 2)
+        },
+        "recent_activity": recent_tasks,
+        "model_usage": model_usage
+    }
+
+# File upload endpoint for enhanced task processing
+@app.post("/api/upload")
+async def upload_file(file: UploadFile = File(...)):
+    """Handle file uploads for enhanced task processing"""
+    try:
+        content = await file.read()
+        
+        # Save file temporarily (in production, use proper storage)
+        file_id = str(uuid.uuid4())
+        file_path = f"/tmp/{file_id}_{file.filename}"
+        
+        with open(file_path, "wb") as f:
+            f.write(content)
+        
+        return {
+            "file_id": file_id,
+            "filename": file.filename,
+            "size": len(content),
+            "content_type": file.content_type,
+            "path": file_path
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
+
 @app.delete("/api/agents/{agent_id}")
 async def delete_agent(agent_id: str):
     # Delete agent
@@ -444,10 +504,39 @@ async def delete_agent(agent_id: str):
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Agent not found")
     
-    # Delete associated tasks
+    # Delete associated tasks and conversations
     await db.tasks.delete_many({"agent_id": agent_id})
+    await db.conversations.delete_many({"agent_id": agent_id})
     
-    return {"message": "Agent and associated tasks deleted"}
+    return {"message": "Agent and associated data deleted"}
+
+# Health check endpoint
+@app.get("/api/health")
+async def health_check():
+    """Health check endpoint for monitoring"""
+    try:
+        # Test database connection
+        await db.agents.count_documents({})
+        
+        # Test Groq API connection
+        test_response = groq_client.chat.completions.create(
+            messages=[{"role": "user", "content": "test"}],
+            model="llama3-8b-8192",
+            max_tokens=10
+        )
+        
+        return {
+            "status": "healthy",
+            "database": "connected",
+            "groq_api": "connected",
+            "timestamp": datetime.utcnow()
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.utcnow()
+        }
 
 if __name__ == "__main__":
     import uvicorn
