@@ -34,14 +34,14 @@ groq_client = Groq(
     base_url=os.getenv("GROQ_BASE_URL", "https://api.groq.com")
 )
 
-# Smart Model Selection Configuration
+# Smart Model Selection Configuration - Updated for 2025 available models
 MODEL_SELECTION_CONFIG = {
     "creative_tasks": "llama3-70b-8192",  # Creative writing, content generation
-    "analysis_tasks": "mixtral-8x7b-32768",  # Data analysis, complex reasoning
-    "fast_responses": "llama3-8b-8192",  # Quick responses, simple tasks
+    "analysis_tasks": "llama-3.3-70b-versatile",  # Data analysis, complex reasoning - Updated model
+    "fast_responses": "llama-3.1-8b-instant",  # Quick responses, simple tasks - Updated model
     "coding_tasks": "llama3-70b-8192",  # Code generation, technical tasks
-    "conversation": "llama3-8b-8192",  # Multi-turn conversations
-    "default": "llama3-8b-8192"
+    "conversation": "llama-3.1-8b-instant",  # Multi-turn conversations - Updated model
+    "default": "llama-3.1-8b-instant"  # Updated default model
 }
 
 # Task Classification Keywords
