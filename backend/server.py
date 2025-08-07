@@ -73,10 +73,10 @@ def select_optimal_model(task_type: str, complexity_score: int = 1) -> str:
     
     # Upgrade to more powerful model for complex tasks
     if complexity_score > 3:
-        if base_model == "llama3-8b-8192":
+        if base_model == "llama-3.1-8b-instant":
             return "llama3-70b-8192"
         elif base_model == "llama3-70b-8192":
-            return "mixtral-8x7b-32768"
+            return "llama-3.3-70b-versatile"  # Updated to available model
     
     return base_model
 
