@@ -554,39 +554,55 @@ const AppContent = () => {
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                   <div className="lg:col-span-2">
-                    <QuickActions onAction={handleQuickAction} recentTasks={tasks.slice(0, 3)} />
+                    <EnhancedQuickActions 
+                      onAction={handleQuickAction} 
+                      recentTasks={tasks.slice(0, 5)} 
+                      agents={agents}
+                    />
                   </div>
                   
                   <div className="space-y-6">
-                    {/* Quick Stats */}
+                    {/* Enhanced Quick Stats */}
                     <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-                      <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Quick Stats</h3>
+                      <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center">
+                        <Brain className="w-5 h-5 mr-2 text-purple-500" />
+                        Enhanced Stats
+                      </h3>
                       <div className="space-y-4" role="list">
                         <div className="flex items-center justify-between" role="listitem">
                           <div className="flex items-center">
                             <Bot className="w-4 h-4 text-blue-500 mr-2" aria-hidden="true" />
-                            <span className="text-sm text-gray-600 dark:text-gray-400">Total Agents</span>
+                            <span className="text-sm text-gray-600 dark:text-gray-400">Smart Agents</span>
                           </div>
-                          <span className="font-semibold text-gray-900 dark:text-white" aria-label={`${agents.length} total agents`}>
+                          <span className="font-semibold text-gray-900 dark:text-white" aria-label={`${agents.length} smart agents`}>
                             {agents.length}
                           </span>
                         </div>
                         <div className="flex items-center justify-between" role="listitem">
                           <div className="flex items-center">
-                            <MessageSquare className="w-4 h-4 text-green-500 mr-2" aria-hidden="true" />
-                            <span className="text-sm text-gray-600 dark:text-gray-400">Total Tasks</span>
+                            <Star className="w-4 h-4 text-yellow-500 mr-2" aria-hidden="true" />
+                            <span className="text-sm text-gray-600 dark:text-gray-400">Avg Intelligence</span>
                           </div>
-                          <span className="font-semibold text-gray-900 dark:text-white" aria-label={`${tasks.length} total tasks`}>
-                            {tasks.length}
+                          <span className="font-semibold text-gray-900 dark:text-white" aria-label={`${(enhancedFeatures.intelligenceScore * 100).toFixed(0)}% average intelligence`}>
+                            {(enhancedFeatures.intelligenceScore * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between" role="listitem">
+                          <div className="flex items-center">
+                            <Upload className="w-4 h-4 text-emerald-500 mr-2" aria-hidden="true" />
+                            <span className="text-sm text-gray-600 dark:text-gray-400">Files Processed</span>
+                          </div>
+                          <span className="font-semibold text-gray-900 dark:text-white" aria-label={`${enhancedFeatures.multimodalCount} files processed`}>
+                            {enhancedFeatures.multimodalCount}
                           </span>
                         </div>
                         <div className="flex items-center justify-between" role="listitem">
                           <div className="flex items-center">
                             <CheckCircle className="w-4 h-4 text-green-500 mr-2" aria-hidden="true" />
-                            <span className="text-sm text-gray-600 dark:text-gray-400">Completed</span>
+                            <span className="text-sm text-gray-600 dark:text-gray-400">Success Rate</span>
                           </div>
-                          <span className="font-semibold text-gray-900 dark:text-white" aria-label={`${tasks.filter(t => t.status === 'completed').length} completed tasks`}>
-                            {tasks.filter(t => t.status === 'completed').length}
+                          <span className="font-semibold text-gray-900 dark:text-white" aria-label={`${Math.round((tasks.filter(t => t.status === 'completed').length / Math.max(tasks.length, 1)) * 100)}% success rate`}>
+                            {Math.round((tasks.filter(t => t.status === 'completed').length / Math.max(tasks.length, 1)) * 100)}%
                           </span>
                         </div>
                       </div>
