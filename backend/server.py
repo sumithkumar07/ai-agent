@@ -153,7 +153,7 @@ AGENT_TEMPLATES = [
         description="Analyzes data, creates insights, and provides recommendations",
         system_prompt="You are a skilled data analyst. Provide clear, data-driven insights with actionable recommendations. Use charts and visualizations when helpful.",
         specialization="analysis_tasks",
-        suggested_model="mixtral-8x7b-32768",
+        suggested_model="llama-3.3-70b-versatile",  # Updated to available model
         icon="📊",
         category="analysis"
     ),
